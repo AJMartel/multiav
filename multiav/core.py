@@ -61,10 +61,11 @@
 import os
 import re
 import codecs
+import time
 import ConfigParser
 
 from tempfile import NamedTemporaryFile
-from subprocess import check_output, CalledProcessError
+from subprocess import check_output, CalledProcessError, call
 from multiprocessing import Process, Queue, cpu_count
 
 try:
@@ -129,6 +130,41 @@ class CAvScanner:
       return False
 
 #-----------------------------------------------------------------------
+class CTrendmicroScanner(CAvScanner):
+  def __init__(self, cfg_parser):
+    CAvScanner.__init__(self, cfg_parser)
+    self.name = "Trendmicro"
+    #It seems as fast as kaspersky even faster
+    self.speed = AV_SPEED_FAST
+    self.pattern1 = "\\nfilename=(.*)"
+    self.pattern2 = "\\nvirus_name=(.*)"
+
+  def scan(self, path):
+    if self.pattern is None:
+      Exception("Not implemented")
+
+    try:
+      cmd = self.build_cmd(path)
+    except:
+      pass
+    
+    logdir = '/var/log/TrendMicro/SProtectLinux'
+    logfile = logdir+'/Virus.' + time.strftime('%Y%m%d') + '.0001'
+    call(cmd)
+
+    with open(logfile, 'r') as log:
+      output = log.read()
+    reset = open(logfile, 'wb') #Clear the log file
+    reset.close()
+
+    matches1 = re.findall(self.pattern1, output, re.IGNORECASE|re.MULTILINE)
+    matches2 = re.findall(self.pattern2, output, re.IGNORECASE|re.MULTILINE)
+    for i in range(len(matches1)):
+      self.results[matches1[i].split(' (')[0]] = matches2[i]
+
+    return len(self.results) > 0
+#-----------------------------------------------------------------------
+
 class CComodoScanner(CAvScanner):
   def __init__(self, cfg_parser):
     CAvScanner.__init__(self, cfg_parser)
@@ -409,7 +445,8 @@ class CAvgScanner(CAvScanner):
     # Considered fast because it requires the daemon to be running.
     # This is why...
     self.speed = AV_SPEED_ULTRA
-    self.pattern = "\>{0,1}(.*) \s+[a-z]+\s+[a-z]+\s+(.*)"
+    self.pattern1 = "\>{0,1}(.*) \s+[a-z]+\s+[a-z]+\s+(.*)"
+    self.pattern2 = "\>{0,1}(.*) \s+[a-z]+\s+(.*)" #like this:Luhe.Fiha.A
 
   def scan(self, path):
     cmd = self.build_cmd(path)
@@ -426,10 +463,12 @@ class CAvgScanner(CAvScanner):
     output = open(fname, "rb").read()
     os.unlink(fname)
 
-    matches = re.findall(self.pattern, output, re.IGNORECASE|re.MULTILINE)
+    matches1 = re.findall(self.pattern1, output, re.IGNORECASE|re.MULTILINE)
+    matches2 = re.findall(self.pattern2, output, re.IGNORECASE|re.MULTILINE)
+    matches = matches1 +matches2
     for match in matches:
       if match[1] not in ["file"]:
-        self.results[match[0]] = match[1]
+        self.results[match[0].split(':/')[0]] = match[1]
     return len(self.results) > 0
 
 # -----------------------------------------------------------------------
@@ -535,7 +574,7 @@ class CMultiAV:
                     CAvastScanner,  CAvgScanner,         CDrWebScanner,
                     CMcAfeeScanner, CIkarusScanner,      CFSecureScanner,
                     CKasperskyScanner, CZavScanner,      CEScanScanner,
-                    CCyrenScanner,  CQuickHealScanner]
+                    CCyrenScanner,  CQuickHealScanner,   CTrendmicroScanner]
     if has_clamd:
       self.engines.append(CClamScanner)
 
@@ -563,14 +602,12 @@ class CMultiAV:
         p.start()
         running.append(p)
 
-      i = 0
+      newrunning = []
       for p in list(running):
         p.join(0.1)
-        if not p.is_alive():
-          del running[i]
-          i -= 1
-        else:
-          i += 1
+        if p.is_alive():
+          newrunning.append(p)
+      running = newrunning
 
     results = {}
     while not q.empty():
